@@ -1,0 +1,8 @@
+spring:
+  datasource:
+    url: jdbc:h2:file:./data/loja;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE
+    username: sa
+    password: ""
+app:
+  jwt:
+    secret: ${JWT_SECRET:chave-local-demonstracao-loja-unipar-2026-altere-fora-do-demo}

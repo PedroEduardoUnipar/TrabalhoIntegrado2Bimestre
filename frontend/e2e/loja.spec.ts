@@ -1,0 +1,132 @@
+import { test, expect, Page, APIRequestContext } from '@playwright/test';
+
+async function entrar(page: Page, perfil: 'Administrador' | 'Cliente') {
+  await page.goto('/login');
+  await page.getByRole('button', { name: perfil, exact: true }).click();
+  await page.getByRole('button', { name: 'Entrar na loja' }).click();
+  await expect(page.getByRole('heading', { name: 'Encontre seu próximo favorito.' })).toBeVisible();
+}
+
+async function adminToken(request: APIRequestContext) {
+  const resposta = await request.post('/api/auth/login', { data: { email: 'admin@loja.com', senha: 'Admin123!' } });
+  expect(resposta.status()).toBe(200);
+  return { Authorization: 'Bearer ' + (await resposta.json()).token };
+}
+
+test('login, autorização e navegação', async ({ page }) => {
+  await page.goto('/admin/produtos');
+  await expect(page).toHaveURL(/\/login$/);
+  await page.getByLabel('E-mail', { exact: true }).fill('cliente@loja.com');
+  await page.getByLabel('Senha', { exact: true }).fill('incorreta');
+  await page.getByRole('button', { name: 'Entrar na loja' }).click();
+  await expect(page.getByRole('alert')).toContainText('E-mail ou senha inválidos.');
+  await page.getByRole('button', { name: 'Cliente', exact: true }).click();
+  await page.getByRole('button', { name: 'Entrar na loja' }).click();
+  await expect(page.getByRole('heading', { name: 'Encontre seu próximo favorito.' })).toBeVisible();
+  await expect(page.getByRole('navigation').getByRole('link', { name: 'Produtos', exact: true })).toHaveCount(0);
+  await page.goto('/admin/categorias');
+  await expect(page).toHaveURL(/\/catalogo$/);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.getByRole('button', { name: 'Sair', exact: true }).click();
+  await expect(page).toHaveURL(/\/login$/);
+});
+
+test('administrador cria, busca, edita e exclui categoria e produto', async ({ page }) => {
+  const sufixo = Date.now().toString();
+  const categoria = 'Categoria E2E ' + sufixo;
+  const produto = 'Produto E2E ' + sufixo;
+  await entrar(page, 'Administrador');
+  await page.getByRole('navigation').getByRole('link', { name: 'Categorias', exact: true }).click();
+  await page.getByRole('button', { name: 'Nova categoria' }).click();
+  let dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Nome', { exact: true }).fill(categoria);
+  await dialog.getByLabel('Descrição', { exact: true }).fill('Categoria criada pelo teste.');
+  await dialog.getByRole('button', { name: 'Salvar categoria' }).click();
+  let linha = page.getByRole('row').filter({ hasText: categoria });
+  await expect(linha).toBeVisible();
+  await linha.getByRole('button', { name: 'Editar', exact: true }).click();
+  dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Descrição', { exact: true }).fill('Descrição atualizada.');
+  await dialog.getByRole('button', { name: 'Salvar categoria' }).click();
+  await expect(linha).toContainText('Descrição atualizada.');
+  await page.getByRole('navigation').getByRole('link', { name: 'Produtos', exact: true }).click();
+  await page.getByRole('button', { name: 'Novo produto' }).click();
+  dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Nome', { exact: true }).fill(produto);
+  await dialog.getByLabel('Descrição', { exact: true }).fill('Produto criado pelo navegador.');
+  await dialog.getByRole('combobox', { name: 'Categoria', exact: true }).selectOption({ label: categoria });
+  await dialog.getByLabel('Cor', { exact: true }).fill('Azul');
+  await dialog.getByLabel('Preço (R$)', { exact: true }).fill('12.50');
+  await dialog.getByLabel('Estoque', { exact: true }).fill('10');
+  await dialog.getByRole('button', { name: 'Salvar produto' }).click();
+  linha = page.getByRole('row').filter({ hasText: produto });
+  await expect(linha).toBeVisible();
+  await linha.getByRole('button', { name: 'Editar', exact: true }).click();
+  dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Preço (R$)', { exact: true }).fill('15.90');
+  await dialog.getByRole('button', { name: 'Salvar produto' }).click();
+  await expect(linha).toContainText('15,90');
+  await page.getByRole('textbox', { name: 'Nome do produto' }).fill(produto);
+  await page.getByRole('textbox', { name: 'Cor', exact: true }).fill('azul');
+  const filtro = page.waitForRequest(r => r.url().includes('/api/produtos?') && r.url().includes('cor=azul'));
+  await page.getByRole('button', { name: 'Filtrar', exact: true }).click();
+  await filtro;
+  await expect(page.locator('tbody tr')).toHaveCount(1);
+  await linha.getByRole('button', { name: 'Excluir', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Excluir produto' }).click();
+  await expect(page.getByRole('heading', { name: 'Nenhum produto encontrado.' })).toBeVisible();
+  await page.getByRole('navigation').getByRole('link', { name: 'Categorias', exact: true }).click();
+  await page.getByRole('row').filter({ hasText: categoria }).getByRole('button', { name: 'Excluir', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Excluir categoria' }).click();
+  await expect(page.getByRole('row').filter({ hasText: categoria })).toHaveCount(0);
+});
+
+test('cadastro, filtro no path, compra e cancelamento atualizam o estoque', async ({ page, request }) => {
+  const erros: string[] = [];
+  page.on('pageerror', error => erros.push(error.message));
+  const sufixo = Date.now().toString();
+  const headers = await adminToken(request);
+  const respostaCategoria = await request.post('/api/categorias', { headers, data: { nome: 'Pedidos E2E ' + sufixo, descricao: '' } });
+  expect(respostaCategoria.status()).toBe(201);
+  const categoria = await respostaCategoria.json();
+  const respostaProduto = await request.post('/api/produtos', { headers, data: { nome: 'Caneta E2E ' + sufixo, descricao: 'Produto para testar pedidos.', cor: 'Azul', preco: 7.90, estoque: 3, ativo: true, categoriaId: categoria.id } });
+  expect(respostaProduto.status()).toBe(201);
+  const produto = await respostaProduto.json();
+  const email = `e2e${sufixo}@teste.com`;
+  await page.goto('/cadastro');
+  await page.getByLabel('Seu nome', { exact: true }).fill('Cliente E2E');
+  await page.getByLabel('E-mail', { exact: true }).fill(email);
+  await page.getByLabel('Senha', { exact: true }).fill('SenhaE2E123!');
+  await page.getByRole('button', { name: 'Criar minha conta' }).click();
+  await expect(page).toHaveURL(/\/login$/);
+  await page.getByLabel('E-mail', { exact: true }).fill(email);
+  await page.getByLabel('Senha', { exact: true }).fill('SenhaE2E123!');
+  await page.getByRole('button', { name: 'Entrar na loja' }).click();
+  await expect(page.getByRole('heading', { name: 'Encontre seu próximo favorito.' })).toBeVisible();
+  await page.getByRole('textbox', { name: 'Buscar por nome' }).fill('Caneta E2E ' + sufixo);
+  await page.getByRole('combobox', { name: 'Categoria', exact: true }).selectOption(String(categoria.id));
+  await page.getByRole('textbox', { name: 'Cor', exact: true }).fill('azul');
+  const filtro = page.waitForRequest(r => r.url().includes(`/api/categorias/${categoria.id}/produtos?`) && r.url().includes('cor=azul'));
+  await page.getByRole('button', { name: 'Filtrar', exact: true }).click();
+  await filtro;
+  await expect(page.locator('.product-card')).toHaveCount(1);
+  await page.getByRole('button', { name: `Adicionar ${produto.nome} ao carrinho` }).click();
+  await page.getByRole('button', { name: 'Abrir carrinho' }).click();
+  let dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: 'Aumentar quantidade' }).click();
+  await expect(dialog.locator('.cart-total')).toContainText('15,80');
+  await dialog.getByRole('button', { name: 'Finalizar pedido', exact: true }).click();
+  await expect(page).toHaveURL(/\/pedidos$/);
+  await expect(page.locator('tbody tr')).toHaveCount(1);
+  const estoqueAposCompra = await request.get(`/api/produtos/${produto.id}`, { headers });
+  expect((await estoqueAposCompra.json()).estoque).toBe(1);
+  await page.getByRole('button', { name: 'Ver pedido', exact: true }).click();
+  dialog = page.getByRole('dialog');
+  await expect(dialog.locator('.cart-total')).toContainText('15,80');
+  await dialog.getByRole('button', { name: 'Cancelar pedido', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Confirmar cancelamento' }).click();
+  await expect(dialog.locator('.badge')).toHaveText('Cancelado');
+  const estoqueAposCancelamento = await request.get(`/api/produtos/${produto.id}`, { headers });
+  expect((await estoqueAposCancelamento.json()).estoque).toBe(3);
+  expect(erros).toEqual([]);
+});
