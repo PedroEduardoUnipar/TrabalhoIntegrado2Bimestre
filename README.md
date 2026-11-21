@@ -95,7 +95,7 @@ Tecnologias: Java 21, Spring Boot 3.5.16, Spring Data JPA, Spring Security, Bean
 | Consultar e cancelar os próprios pedidos | Sim | Sim |
 | Consultar e cancelar pedidos de outros usuários | Não | Sim |
 
-- O cadastro público sempre cria perfil `COMUM`. Não existe campo de perfil ou senha hash nos responses de cadastro/login.
+- O cadastro público sempre cria perfil `COMUM`. O request de cadastro não aceita perfil; as respostas informam o perfil, mas nunca incluem a senha ou seu hash.
 - Cada produto pertence a uma categoria. Uma categoria pode começar sem produtos; uma categoria com produtos vinculados não pode ser excluída.
 - Preço deve ser positivo, com até duas casas decimais e no máximo R$ 9.999.999,99. Estoque informado no cadastro deve ser inteiro entre 0 e 1.000.000.
 - O pedido aceita de 1 a 50 produtos diferentes, com quantidade de 1 a 9.999 por produto. Produto inativo ou sem estoque suficiente impede a compra inteira.
